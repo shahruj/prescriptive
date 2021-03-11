@@ -1,17 +1,19 @@
 import os
+import datetime
 import sagemaker
 import boto3
 from sagemaker.tensorflow import TensorFlow
 from prep_data_set_2 import *
 import pandas
-import matplot.pyplot as plt
+import matplotlib.pyplot as plt
 #Variables
 role = "arn:aws:iam::968710761052:role/service-role/AmazonSageMaker-ExecutionRole-20210205T194406"
 
-modelname = 'model_2021_2_19'
+currentTime = datetime.datetime.now()
+modelname = f"model_{currentTime.month}_{currentTime.day}_{currentTime.hour}_{currentTime.minute}_{currentTime.second}"
 
 
-load_data = prep_data('cement_final.csv','fypcementbucket',modelname)
+load_data = prep_data('cement.csv','fypcementbucket',modelname)
 
 load_data.split(0.15)
 
@@ -44,6 +46,3 @@ fig.savefig("pred.png")
 s3 = boto3.resource('s3')
 s3.meta.client.upload_file("MSE.png", 'fypcementbucket','models/{}/MSE.png'.format(modelname))
 s3.meta.client.upload_file("pred.png", 'fypcementbucket','models/{}/pred.png'.format(modelname))
-
-
-
