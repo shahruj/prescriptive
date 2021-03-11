@@ -5,6 +5,7 @@ from tensorflow import keras
 from time import gmtime, strftime 
 from tensorflow.keras import layers
 from sklearn.model_selection import train_test_split
+import sklearn.metrics as sm
 import boto3, re, sys, math, json, os, urllib.request,time
 import subprocess
 import sys
@@ -74,12 +75,3 @@ if __name__ =='__main__':
     s3.meta.client.upload_file("error.csv", 'fypcementbucket','models/{}/error.csv'.format(modelname))
     s3.meta.client.upload_file("accuracy.txt", 'fypcementbucket','models/{}/accuracy.txt'.format(modelname))   
     tf.contrib.saved_model.save_keras_model(model, data_location)
-
-    
-    
-    
-    
-    
-    
-    
-    
