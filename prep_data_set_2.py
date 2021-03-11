@@ -15,10 +15,16 @@ class prep_data:
         s3.put_object(Bucket=self.bucketname, Key=('models/'+str(self.modelname)+'/'))
         #self.directory = 's3://{}/models/{}'.format(bucketname,modelname)
     def split(self,splitRatio):
+        dict = {"fly_ash":2,"age":7,"coarse_aggregate":5,"cement":0,"water":3,"fine_aggregate":6,"blast_furnace_slag":1,"compressive_strength":8,"superplasticizer":4}
         #Name of the s3 bucket which contains the dataset
         #Path to the s3 bucket location which contains the dataset
         data_location = 's3://{}/data/{}'.format(self.bucketname, self.dataset) 
-        concrete_data = pd.read_csv(data_location)
+        df = pd.read_csv(data_location)
+        concrete_data = df.copy()
+        for i in dict:
+            concrete_data.iloc[:,dict[i]]=df[i]
+        concrete_data.drop(concrete_data.columns[9], axis=1, inplace=True)
+        
         #concrete_data = pd.read_csv('cement.csv')
         min_d = concrete_data.min()
         max_d = concrete_data.max()
