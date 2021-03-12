@@ -17,11 +17,12 @@ import ast
 import json
 import pprint
 import time
+import threading
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
-from MOPSO_Vectorised import *
+
 
 '''TEST SECTION - REMOVE LATER '''
-os.system(f'echo "{sys.argv[1]}">temp.txt ')
+#os.system(f'echo "{sys.argv[1]}">temp.txt ')
 # print(sys.argv[1])
 
 
@@ -52,7 +53,7 @@ def MQTT_PUBLISH(topic, payload):
     KEYPATH = 'certificates/private.pem.key'
     # caPath
     CAPATH = 'certificates/root.ca.pem'
-    
+
     myAWSIoTMQTTClient = AWSIoTMQTTClient(CLIENT_NAME)
     myAWSIoTMQTTClient.configureEndpoint(HOST, 8883)
     myAWSIoTMQTTClient.configureCredentials(CAPATH, KEYPATH, CERTPATH)
@@ -72,15 +73,27 @@ def Get_ModelStatus():
     response = client.list_endpoints()
 
     if len(response['Endpoints']) == 0:
-        MODEL_PAYLOAD = {"state": {"desired": {"Name": "Nil", "Accuracy": "Nil", "Status": "Nil"}}}
-        MQTT_PUBLISH('$aws/things/predictiveModel/shadow/update', MODEL_PAYLOAD)
+        MODEL_PAYLOAD = {"state": {"desired": {
+            "Name": "Nil", "Accuracy": "Nil", "Status": "Nil"}}}
+        MQTT_PUBLISH(
+            '$aws/things/predictiveModel/shadow/update', MODEL_PAYLOAD)
 
     else:
         MODEL_PAYLOAD = {"state": {"desired": {"Status": "Nil"}}}
         MODEL_PAYLOAD["state"]["desired"]["Status"] = response['Endpoints'][0]['EndpointStatus']
-        MQTT_PUBLISH('$aws/things/predictiveModel/shadow/update', MODEL_PAYLOAD)
+        MQTT_PUBLISH(
+            '$aws/things/predictiveModel/shadow/update', MODEL_PAYLOAD)
 
     MQTT_PUBLISH('$aws/things/predictiveModel/shadow/get', {})
+
+
+def Thread_Handler():
+    '''
+    Function that runs on a separate thread to check the model status while deploying the endpoint
+    '''
+
+    time.sleep(5)
+    Get_ModelStatus()
 
 
 def Deploy_Model(payload, update=False):
@@ -90,7 +103,7 @@ def Deploy_Model(payload, update=False):
 
         sample model_data : 's3://fypcementbucket/models/model_2021_2_19/sagemaker-tensorflow-scriptmode-2021-02-21-13-37-05-805/output/model.tar.gz'
     '''
-    
+
     from sagemaker.tensorflow.serving import Model
 
     model = Model(
@@ -98,6 +111,9 @@ def Deploy_Model(payload, update=False):
         role="arn:aws:iam::968710761052:role/service-role/AmazonSageMaker-ExecutionRole-20210205T194406",
         framework_version='1.12.0'
     )
+
+    newThread = threading.Thread(target=Thread_Handler)
+    newThread.start()
 
     predictor = model.deploy(initial_instance_count=1, instance_type='ml.c5.xlarge',
                              endpoint_name='sagemaker-tensorflow-serving-2021-02-21-fypmodel-endpoint', update_endpoint=update)
@@ -126,8 +142,11 @@ def Invoke_Model(payload):
         sample endpoint_name: 'sagemaker-tensorflow-serving-2021-02-21-fypmodel-endpoint'
     '''
     import boto3
+
     client = boto3.client('runtime.sagemaker')
+
     data = ast.literal_eval(payload['data'])
+
     response = client.invoke_endpoint(EndpointName=payload['endpoint_name'],
                                       ContentType='application/json',
                                       Body=json.dumps(data))
@@ -136,104 +155,138 @@ def Invoke_Model(payload):
     res = result['predictions'][0]
     print(res)
 
-from MOPSO_Vectorised import *
-from GA import *
-import matplotlib.pyplot as plt
 
 def Get_Prescription(payload):
     ''' SERVICE NUMBER 5. Get the prescriptive anaytics value
-    
-    payload  = {data:json object containing the parameters,limit_path:s3 bucket path to the limit}
-    
+
+    payload  = {data:json object containing the parameters,modelName:name of the model}
+
     sample data:
     {
-        'Age': {'optimised': 'true', 'value': 'null'},
-        'BlastFurn': {'optimised': 'true', 'value': 'null'},
-        'Cement': {'optimised': 'true', 'value': 'null'},
-        'CoarseAggregate': {'optimised': 'true', 'value': 'null'},
-        'FineAggregate': {'optimised': 'true', 'value': 'null'},
-        'FlyAsh': {'optimised': 'true', 'value': 'null'},
-        'Superplasticizer': {'optimised': 'true', 'value': 'null'},
-        'Water': {'optimised': 'true', 'value': 'null'},
-        'optimisationType': "soo",
+        Age: {optimised: true, value: null},
+        BlastFurn: {optimised: true, value: null},
+        Cement: {optimised: true, value: null},
+        CoarseAggregate: {optimised: true, value: null},
+        FineAggregate: {optimised: true, value: null},
+        FlyAsh: {optimised: true, value: null},
+        Superplasticizer: {optimised: true, value: null},
+        Water: {optimised: true, value: null},
+        optimisationType: "soo",
     }
-    
-    sample limit_path: 's3://fypcementbucket/models/model_2021_2_19/sagemaker-tensorflow-scriptmode-2021-02-21-13-37-05-805/limit.format'
-    
+
+    sample modelName: 'model_2021_2_19'
+
     '''
 
-    #Add your code below
+    # Add your code below
     import boto3
+    import GA as ga
+    import numpy as np
+    import pandas as pd
+    import MOPSO_Vectorised as mp
+    import matplotlib.pyplot as plt
+
     s3 = boto3.client('s3')
-    s3.download_file('fypcementbucket', 'models/{}/limits.txt'.format(model_name),"limits.txt")
-    obj = json.loads(limits)
+
+    s3.download_file('fypcementbucket',
+                     'models/{}/limits.txt'.format(payload['modelName']), "limits.txt")
+
+    with open('limits.txt', 'r') as file:
+        limits = file.read().replace("\n", " ")
+        obj = json.loads(limits)
+
     bounds = np.array(obj)
-    cost = np.array([[0.110,0.060,0.055,0.00024,2.940,0.010,0.006,0]])
+    cost = np.array([[0.110, 0.060, 0.055, 0.00024, 2.940, 0.010, 0.006, 0]])
     exclude = []
-    x0 = [0,0,0,0,0,0,0,0]
-    data = json.loads(payload['data'])
-    
-    dict = {'Age':7,'BlastFurn':1,'Cement':0,'CoarseAggregate':5,'FineAggregate':6,'FlyAsh':2,
-            'Superplasticizer':4,'Water':3,'null':0}
-    
+    x0 = [0, 0, 0, 0, 0, 0, 0, 0]
+    data = payload['data']
+
+    dict = {'Age': 7, 'BlastFurn': 1, 'Cement': 0, 'CoarseAggregate': 5, 'FineAggregate': 6, 'FlyAsh': 2,
+            'Superplasticizer': 4, 'Water': 3, 'null': 0}
+
     for i in data:
         if str(i) != 'optimisationType':
             if data[str(i)]['optimised'] == 'false':
-                exclude.append(dict[str(i)])    
+                exclude.append(dict[str(i)])
             if data[str(i)]['value'] != 'null':
-                x0[dict[str(i)]]=c[str(i)]['value']
-    
-    fig, paretofront = mopso(x0,bounds,10,100,8,exclude,cost, False)
-    fig.savefig("precribe.png")    
-    print(paretofront)
+                x0[dict[str(i)]] = data[str(i)]['value']
+
+    if data["optimisationType"] == "moo":
+        fig, paretofront = mp.mopso(
+            x0, bounds, 10, 10, 8, exclude, cost, True)
+        fig.savefig("precribe.png")
+        pd.DataFrame(paretofront).to_csv("prescribe_data.csv")
+        s3_1 = boto3.resource('s3')
+        s3_1.meta.client.upload_file(
+            "precribe.png", 'fypcementbucket', 'prescriptions/MOO/precribe.png')
+        s3_1.meta.client.upload_file(
+            "prescribe_data.csv", 'fypcementbucket', 'prescriptions/MOO/prescribe_data.csv')
+    else:
+        data = ga.GA(bounds, 15, 10, 8, exclude, x0, True)
+        df = pd.DataFrame(data)
+        df.iloc[0].to_csv("prescribe_data.csv")
+        s3_1 = boto3.resource('s3')
+        s3_1.meta.client.upload_file(
+            "prescribe_data.csv", 'fypcementbucket', 'prescriptions/SOO/prescribe_data.csv')
+
 # ------------------MAIN CODE--------------------------------
 
+
 PUBTOPIC = 'webuser/service/output'
+
 
 if SERVICE_NUMBER == 1:
     try:
         Get_ModelStatus()
     except Exception as e:
-        MQTT_PUBLISH(PUBTOPIC,{"case-1": f'Error: {str(e)}'})
+        MQTT_PUBLISH(PUBTOPIC, {"case-1": f'Error: {str(e)}'})
     else:
-        MQTT_PUBLISH(PUBTOPIC,{"case-1": "Success"})
-    
-    
+        MQTT_PUBLISH(PUBTOPIC, {"case-1": "Success"})
+
+
 elif SERVICE_NUMBER == 2:
     try:
         Deploy_Model(SERVICE_INPUT_PAYLOAD)
     except Exception as e:
-        MQTT_PUBLISH(PUBTOPIC,{"case-2": f'Error: {str(e)}'})
+        MQTT_PUBLISH(PUBTOPIC, {"case-2": f'Error: {str(e)}'})
     else:
-        MQTT_PUBLISH(PUBTOPIC,{"case-2": "Success"})
+        MQTT_PUBLISH(PUBTOPIC, {"case-2": "Success"})
 
 
 elif SERVICE_NUMBER == 3:
     try:
         pass
     except Exception as e:
-        MQTT_PUBLISH(PUBTOPIC,{"case-3": f'Error: {str(e)}'})
+        MQTT_PUBLISH(PUBTOPIC, {"case-3": f'Error: {str(e)}'})
     else:
-        MQTT_PUBLISH(PUBTOPIC,{"case-3": "Success"})
+        MQTT_PUBLISH(PUBTOPIC, {"case-3": "Success"})
 
 
 elif SERVICE_NUMBER == 4:
     try:
         pass
     except Exception as e:
-        MQTT_PUBLISH(PUBTOPIC,{"case-4": f'Error: {str(e)}'})
+        MQTT_PUBLISH(PUBTOPIC, {"case-4": f'Error: {str(e)}'})
     else:
-        MQTT_PUBLISH(PUBTOPIC,{"case-4": "Success"})
+        MQTT_PUBLISH(PUBTOPIC, {"case-4": "Success"})
 
 
 elif SERVICE_NUMBER == 5:
-    try:
-        pass
-    except Exception as e:
-        MQTT_PUBLISH(PUBTOPIC,{"case-5": f'Error: {str(e)}'})
-    else:
-        MQTT_PUBLISH(PUBTOPIC,{"case-5": "Success"})
-
+    test_payload = {"data": {
+        "Age": {"optimised": "true", "value": "40"},
+        "BlastFurn": {"optimised": "true", "value": "22"},
+        "Cement": {"optimised": "true", "value": "12"},
+        "CoarseAggregate": {"optimised": "true", "value": "24"},
+        "FineAggregate": {"optimised": "true", "value": "31"},
+        "FlyAsh": {"optimised": "false", "value": "43"},
+        "Superplasticizer": {"optimised": "true", "value": "433"},
+        "Water": {"optimised": "true", "value": "20"},
+        "optimisationType": "moo"
+    },
+        "modelName": "model_3_12_11_5_12"
+    }
+    # print(test_payload)
+    Get_Prescription(test_payload)
 
 else:
     print(f"{SERVICE_NUMBER} -- {SERVICE_NAME} is a invalid option")
